@@ -1,0 +1,7 @@
+{
+  "name": "Dương-ai-video",
+  "description": "A professional AI storyboard director that maintains character consistency across cinematic frames based on a reference image and script.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
