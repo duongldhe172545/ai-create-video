@@ -1,15 +1,27 @@
-
 import React, { useState, useCallback, useMemo } from 'react';
 import Header from './components/Header';
 import CharacterPanel from './components/CharacterPanel';
 import ScriptPanel from './components/ScriptPanel';
 import FrameCard from './components/FrameCard';
 import ReferenceAssetsPanel from './components/ReferenceAssetsPanel';
-import { GeminiService } from './services/geminiService';
-import { ContentState, FrameData } from './types';
 
-// The aistudio property is already defined in the global environment.
-// We use type casting where needed to access its methods to avoid conflicting declarations.
+// Clean Architecture Imports
+import { createContainer } from './src/di/container';
+import { TYPES } from './src/di/types';
+import type { CampaignController } from './src/interface-adapters/controllers/campaign.controller';
+import type { FrameController } from './src/interface-adapters/controllers/frame.controller';
+import { Frame } from './src/entities/models/frame.model';
+import { ReferenceAsset } from './src/entities/models/reference-asset.model';
+
+// Types for State (can still use legacy interfaces or map them)
+interface ContentState {
+  characterImage: string | null;
+  referenceAssets: ReferenceAsset[];
+  targetDurationSec: number;
+  script: string;
+  frames: Frame[];
+  isProcessingScript: boolean;
+}
 
 const App: React.FC = () => {
   const [apiKey, setApiKey] = useState<string>(() => {
@@ -31,6 +43,10 @@ const App: React.FC = () => {
     }
   }, []);
 
+  // Initialize DI Container
+  // Re-create container only when apiKey changes (as it's a dependency for services)
+  const container = useMemo(() => createContainer(apiKey), [apiKey]);
+
   const [state, setState] = useState<ContentState>({
     characterImage: null,
     referenceAssets: [],
@@ -40,7 +56,10 @@ const App: React.FC = () => {
     isProcessingScript: false,
   });
 
-  const gemini = useMemo(() => new GeminiService(apiKey), [apiKey]);
+  // Resolve Controllers
+  // Note: In strict React flow, we might wrap this in a Context or Hook, but for this refactor, getting from container is fine.
+  const campaignController = container.get<CampaignController>(TYPES.CampaignController);
+  const frameController = container.get<FrameController>(TYPES.FrameController);
 
   const handleProcessScript = async () => {
     if (!state.script || state.isProcessingScript) return;
@@ -50,14 +69,17 @@ const App: React.FC = () => {
     }
 
     setState(prev => ({ ...prev, isProcessingScript: true, frames: [] }));
-    try {
-      const frames = await gemini.parseScriptIntoFrames(state.script, state.targetDurationSec);
-      setState(prev => ({ ...prev, frames, isProcessingScript: false }));
-    } catch (error) {
-      console.error(error);
-      const msg = (error as any)?.message;
-      if (msg === 'MISSING_API_KEY') alert('Thiếu API key. Vui lòng nhập lại.');
-      else alert("Lỗi khi phân tích kịch bản. Vui lòng thử lại.");
+
+    const result = await campaignController.parseScript(state.script, state.targetDurationSec);
+
+    if (result.success && result.data) {
+      setState(prev => ({
+        ...prev,
+        frames: result.data as Frame[],
+        isProcessingScript: false
+      }));
+    } else {
+      alert(result.error);
       setState(prev => ({ ...prev, isProcessingScript: false }));
     }
   };
@@ -70,14 +92,15 @@ const App: React.FC = () => {
       return;
     }
 
-    // Start simulating progress
+    // Optimistic / Progress UI update
+    // We keep the progress simulation logic here for UX consistency, or move it to a presenter callback if we want full decouple.
+    // For now, keeping UI logic in UI layer is acceptable.
     let progress = 0;
     const progressInterval = setInterval(() => {
       setState(prev => {
         const nextFrames = [...prev.frames];
         const idx = nextFrames.findIndex(f => f.frameNumber === frameNumber);
         if (idx !== -1 && nextFrames[idx].isGenerating) {
-          // Slow down as it gets closer to 95%
           const increment = progress < 70 ? 5 : progress < 90 ? 2 : 0.5;
           progress = Math.min(progress + increment, 95);
           nextFrames[idx] = { ...nextFrames[idx], imageProgress: Math.floor(progress) };
@@ -86,31 +109,37 @@ const App: React.FC = () => {
       });
     }, 400);
 
+    // Set generating state
     setState(prev => {
       const nextFrames = [...prev.frames];
       nextFrames[frameIndex] = { ...nextFrames[frameIndex], isGenerating: true, imageProgress: 0 };
       return { ...prev, frames: nextFrames };
     });
 
-    try {
-      const imageUrl = await gemini.generateFrameImage(
-        state.frames[frameIndex],
-        state.characterImage,
-        state.referenceAssets
-      );
-      clearInterval(progressInterval);
-      
+    // Call Controller
+    const result = await frameController.generateImage(
+      state.frames[frameIndex],
+      { imageBase64: state.characterImage }, // Map to Character entity shape
+      state.referenceAssets
+    );
+
+    clearInterval(progressInterval);
+
+    if (result.success && result.data) {
       setState(prev => {
         const nextFrames = [...prev.frames];
         const idx = nextFrames.findIndex(f => f.frameNumber === frameNumber);
         if (idx !== -1) {
-          nextFrames[idx] = { ...nextFrames[idx], imageUrl, isGenerating: false, imageProgress: 100 };
+          nextFrames[idx] = {
+            ...nextFrames[idx],
+            imageUrl: result.data,
+            isGenerating: false,
+            imageProgress: 100
+          };
         }
         return { ...prev, frames: nextFrames };
       });
-    } catch (error) {
-      clearInterval(progressInterval);
-      console.error(error);
+    } else {
       setState(prev => {
         const nextFrames = [...prev.frames];
         const idx = nextFrames.findIndex(f => f.frameNumber === frameNumber);
@@ -119,9 +148,7 @@ const App: React.FC = () => {
         }
         return { ...prev, frames: nextFrames };
       });
-      const msg = (error as any)?.message;
-      if (msg === 'MISSING_API_KEY') alert('Thiếu API key. Vui lòng nhập lại.');
-      else alert("Lỗi khi tạo visual cho shot.");
+      alert(result.error);
     }
   };
 
@@ -134,44 +161,42 @@ const App: React.FC = () => {
       return;
     }
 
+    // UI Updates
     const updatedFrames = [...state.frames];
     updatedFrames[frameIndex].isGeneratingVideo = true;
     updatedFrames[frameIndex].videoProgress = "Đang kết nối Veo 3.1...";
     setState(prev => ({ ...prev, frames: updatedFrames }));
 
-    try {
-      const videoUrl = await gemini.generateVideo(
-        state.frames[frameIndex], 
-        (msg) => {
-          setState(prev => {
-            const nextFrames = [...prev.frames];
-            const idx = nextFrames.findIndex(f => f.frameNumber === frameNumber);
-            if (idx !== -1) {
-              nextFrames[idx].videoProgress = msg;
-            }
-            return { ...prev, frames: nextFrames };
-          });
-        }
-      );
+    const result = await frameController.generateVideo(
+      state.frames[frameIndex],
+      (msg) => {
+        setState(prev => {
+          const nextFrames = [...prev.frames];
+          const idx = nextFrames.findIndex(f => f.frameNumber === frameNumber);
+          if (idx !== -1) {
+            nextFrames[idx].videoProgress = msg;
+          }
+          return { ...prev, frames: nextFrames };
+        });
+      }
+    );
 
+    if (result.success && result.data) {
       setState(prev => {
         const nextFrames = [...prev.frames];
         const idx = nextFrames.findIndex(f => f.frameNumber === frameNumber);
         if (idx !== -1) {
-          nextFrames[idx] = { ...nextFrames[idx], videoUrl, isGeneratingVideo: false, videoProgress: undefined };
+          nextFrames[idx] = {
+            ...nextFrames[idx],
+            videoUrl: result.data,
+            isGeneratingVideo: false,
+            videoProgress: undefined
+          };
         }
         return { ...prev, frames: nextFrames };
       });
-    } catch (error: any) {
-      console.error(error);
-      if (error.message === "KEY_RESET_REQUIRED") {
-        alert("Phiên làm việc hết hạn hoặc lỗi Key. Vui lòng nhập lại API key.");
-      } else if (error.message === 'MISSING_API_KEY') {
-        alert('Thiếu API key. Vui lòng nhập lại.');
-      } else {
-        alert("Lỗi khi tạo video bằng Veo 3.1: " + error.message);
-      }
-      
+    } else {
+      alert(result.error); // Error message is already formatted by Presenter
       setState(prev => {
         const nextFrames = [...prev.frames];
         const idx = nextFrames.findIndex(f => f.frameNumber === frameNumber);
@@ -203,19 +228,19 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen flex flex-col bg-[#050505]">
       <Header apiKey={apiKey} onApiKeyChange={handleApiKeyChange} />
-      
+
       <main className="flex-grow flex flex-col lg:flex-row p-6 gap-6 max-w-[1600px] mx-auto w-full">
         {/* Sidebar trái: Cấu hình */}
         <aside className="w-full lg:w-80 flex flex-col gap-6 shrink-0">
-          <CharacterPanel 
-            image={state.characterImage} 
-            onImageChange={(img) => setState(p => ({ ...p, characterImage: img }))} 
+          <CharacterPanel
+            image={state.characterImage}
+            onImageChange={(img) => setState(p => ({ ...p, characterImage: img }))}
           />
           <ReferenceAssetsPanel
             assets={state.referenceAssets}
             onChange={(assets) => setState(p => ({ ...p, referenceAssets: assets }))}
           />
-          <ScriptPanel 
+          <ScriptPanel
             script={state.script}
             onScriptChange={(script) => setState(p => ({ ...p, script }))}
             targetDurationSec={state.targetDurationSec}
@@ -224,7 +249,7 @@ const App: React.FC = () => {
             isProcessing={state.isProcessingScript}
             canProcess={!!state.script && !!state.characterImage && !!apiKey}
           />
-          
+
           <div className="bg-indigo-900/10 border border-indigo-500/20 p-4 rounded-xl">
             <h4 className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-2 flex items-center gap-2">
               <i className="fa-solid fa-circle-info"></i>
@@ -243,25 +268,25 @@ const App: React.FC = () => {
             <div className="space-y-6">
               <div className="flex items-center justify-between border-b border-white/5 pb-4">
                 <div className="flex items-baseline gap-2">
-                    <h2 className="text-xl font-bold">Shot List Video Content</h2>
+                  <h2 className="text-xl font-bold">Shot List Video Content</h2>
                   <span className="text-sm text-gray-500 uppercase tracking-tighter">
-                      {state.frames.length} shot
+                    {state.frames.length} shot
                   </span>
                 </div>
-                <button 
+                <button
                   onClick={generateAllVisible}
                   className="px-4 py-2 bg-indigo-600/10 border border-indigo-500/20 text-indigo-400 rounded-lg text-sm font-semibold hover:bg-indigo-600/20 transition-all flex items-center gap-2"
                 >
                   <i className="fa-solid fa-play"></i>
-                    Tạo Tất Cả Visual
+                  Tạo Tất Cả Visual
                 </button>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 pb-20">
                 {state.frames.map((frame) => (
-                  <FrameCard 
-                    key={frame.frameNumber} 
-                    frame={frame} 
+                  <FrameCard
+                    key={frame.frameNumber}
+                    frame={frame as any} // Cast safely as Frame is compatible with FrameData
                     onGenerateImage={() => handleGenerateFrameImage(frame.frameNumber)}
                     onGenerateVideo={() => handleGenerateVideo(frame.frameNumber)}
                   />
@@ -304,7 +329,7 @@ const App: React.FC = () => {
             <span className="text-[10px] text-indigo-400 font-bold uppercase tracking-widest">Nội dung đã tải</span>
           </div>
           <div className="flex items-center gap-4">
-            <button 
+            <button
               onClick={() => {
                 alert('Nhập API key ở thanh trên cùng (ô mật khẩu).');
               }}
@@ -313,14 +338,14 @@ const App: React.FC = () => {
               <i className="fa-solid fa-key"></i>
               Đổi API Key
             </button>
-            <button 
+            <button
               onClick={() => window.print()}
               className="text-xs font-bold text-gray-400 hover:text-white flex items-center gap-2 transition-colors"
             >
               <i className="fa-solid fa-print"></i>
               Xuất PDF
             </button>
-            <button 
+            <button
               onClick={() => setState(prev => ({ ...prev, frames: [] }))}
               className="text-xs font-bold text-red-500/70 hover:text-red-500 flex items-center gap-2 transition-colors"
             >
