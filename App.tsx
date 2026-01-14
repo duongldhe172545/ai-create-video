@@ -12,6 +12,25 @@ import { ContentState, FrameData } from './types';
 // We use type casting where needed to access its methods to avoid conflicting declarations.
 
 const App: React.FC = () => {
+  const [apiKey, setApiKey] = useState<string>(() => {
+    try {
+      return (sessionStorage.getItem('duong-ai-video.apiKey') || '').trim();
+    } catch {
+      return '';
+    }
+  });
+
+  const handleApiKeyChange = useCallback((next: string) => {
+    const trimmed = (next || '').trim();
+    setApiKey(trimmed);
+    try {
+      if (!trimmed) sessionStorage.removeItem('duong-ai-video.apiKey');
+      else sessionStorage.setItem('duong-ai-video.apiKey', trimmed);
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+
   const [state, setState] = useState<ContentState>({
     characterImage: null,
     referenceAssets: [],
@@ -21,10 +40,14 @@ const App: React.FC = () => {
     isProcessingScript: false,
   });
 
-  const gemini = useMemo(() => new GeminiService(), []);
+  const gemini = useMemo(() => new GeminiService(apiKey), [apiKey]);
 
   const handleProcessScript = async () => {
     if (!state.script || state.isProcessingScript) return;
+    if (!apiKey) {
+      alert('Vui lòng nhập API key ở thanh trên cùng.');
+      return;
+    }
 
     setState(prev => ({ ...prev, isProcessingScript: true, frames: [] }));
     try {
@@ -32,7 +55,9 @@ const App: React.FC = () => {
       setState(prev => ({ ...prev, frames, isProcessingScript: false }));
     } catch (error) {
       console.error(error);
-      alert("Lỗi khi phân tích kịch bản. Vui lòng thử lại.");
+      const msg = (error as any)?.message;
+      if (msg === 'MISSING_API_KEY') alert('Thiếu API key. Vui lòng nhập lại.');
+      else alert("Lỗi khi phân tích kịch bản. Vui lòng thử lại.");
       setState(prev => ({ ...prev, isProcessingScript: false }));
     }
   };
@@ -40,6 +65,10 @@ const App: React.FC = () => {
   const handleGenerateFrameImage = async (frameNumber: number) => {
     const frameIndex = state.frames.findIndex(f => f.frameNumber === frameNumber);
     if (frameIndex === -1 || !state.characterImage) return;
+    if (!apiKey) {
+      alert('Vui lòng nhập API key ở thanh trên cùng.');
+      return;
+    }
 
     // Start simulating progress
     let progress = 0;
@@ -90,7 +119,9 @@ const App: React.FC = () => {
         }
         return { ...prev, frames: nextFrames };
       });
-      alert("Lỗi khi tạo visual cho shot.");
+      const msg = (error as any)?.message;
+      if (msg === 'MISSING_API_KEY') alert('Thiếu API key. Vui lòng nhập lại.');
+      else alert("Lỗi khi tạo visual cho shot.");
     }
   };
 
@@ -98,20 +129,9 @@ const App: React.FC = () => {
     const frameIndex = state.frames.findIndex(f => f.frameNumber === frameNumber);
     if (frameIndex === -1) return;
 
-    // Check for Veo API Key - with fallback for running outside AI Studio
-    const aistudio = (window as any).aistudio;
-    if (aistudio?.hasSelectedApiKey) {
-      const hasKey = await aistudio.hasSelectedApiKey();
-      if (!hasKey) {
-        alert("Để tạo video bằng Veo 3.1, bạn cần chọn một API Key từ dự án có trả phí (Paid GCP project).");
-        await aistudio.openSelectKey();
-      }
-    } else {
-      // Running outside AI Studio - check if API key is configured
-      if (!process.env.API_KEY || process.env.API_KEY === 'PLACEHOLDER_API_KEY') {
-        alert("Vui lòng cấu hình GEMINI_API_KEY trong file .env.local với API key từ dự án có trả phí (Paid GCP project).");
-        return;
-      }
+    if (!apiKey) {
+      alert('Để tạo video bằng Veo 3.1, vui lòng nhập API key ở thanh trên cùng (key thuộc dự án Paid).');
+      return;
     }
 
     const updatedFrames = [...state.frames];
@@ -145,13 +165,9 @@ const App: React.FC = () => {
     } catch (error: any) {
       console.error(error);
       if (error.message === "KEY_RESET_REQUIRED") {
-        const aistudio = (window as any).aistudio;
-        if (aistudio?.openSelectKey) {
-          alert("Phiên làm việc hết hạn hoặc lỗi Key. Vui lòng chọn lại API Key.");
-          await aistudio.openSelectKey();
-        } else {
-          alert("Phiên làm việc hết hạn hoặc lỗi Key. Vui lòng kiểm tra lại GEMINI_API_KEY trong file .env.local và restart server.");
-        }
+        alert("Phiên làm việc hết hạn hoặc lỗi Key. Vui lòng nhập lại API key.");
+      } else if (error.message === 'MISSING_API_KEY') {
+        alert('Thiếu API key. Vui lòng nhập lại.');
       } else {
         alert("Lỗi khi tạo video bằng Veo 3.1: " + error.message);
       }
@@ -173,6 +189,10 @@ const App: React.FC = () => {
       alert("Vui lòng tải lên ảnh nhân vật trước.");
       return;
     }
+    if (!apiKey) {
+      alert('Vui lòng nhập API key ở thanh trên cùng.');
+      return;
+    }
     for (const frame of state.frames) {
       if (!frame.imageUrl && !frame.isGenerating) {
         await handleGenerateFrameImage(frame.frameNumber);
@@ -182,7 +202,7 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen flex flex-col bg-[#050505]">
-      <Header />
+      <Header apiKey={apiKey} onApiKeyChange={handleApiKeyChange} />
       
       <main className="flex-grow flex flex-col lg:flex-row p-6 gap-6 max-w-[1600px] mx-auto w-full">
         {/* Sidebar trái: Cấu hình */}
@@ -202,7 +222,7 @@ const App: React.FC = () => {
             onTargetDurationChange={(sec) => setState(p => ({ ...p, targetDurationSec: Math.max(8, Math.min(120, sec)) }))}
             onProcess={handleProcessScript}
             isProcessing={state.isProcessingScript}
-            canProcess={!!state.script && !!state.characterImage}
+            canProcess={!!state.script && !!state.characterImage && !!apiKey}
           />
           
           <div className="bg-indigo-900/10 border border-indigo-500/20 p-4 rounded-xl">
@@ -286,12 +306,7 @@ const App: React.FC = () => {
           <div className="flex items-center gap-4">
             <button 
               onClick={() => {
-                const aistudio = (window as any).aistudio;
-                if (aistudio?.openSelectKey) {
-                  aistudio.openSelectKey();
-                } else {
-                  alert("Để đổi API Key, vui lòng chỉnh sửa file .env.local và restart server.\n\nĐường dẫn: GEMINI_API_KEY=your_api_key_here");
-                }
+                alert('Nhập API key ở thanh trên cùng (ô mật khẩu).');
               }}
               className="text-xs font-bold text-indigo-400 hover:text-indigo-300 flex items-center gap-2 transition-colors"
             >

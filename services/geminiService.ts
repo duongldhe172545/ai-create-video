@@ -3,7 +3,24 @@ import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { FrameData, ReferenceAsset } from "../types";
 
 export class GeminiService {
-  constructor() {}
+  private apiKey: string;
+
+  constructor(apiKey: string) {
+    this.apiKey = (apiKey || '').trim();
+  }
+
+  setApiKey(apiKey: string) {
+    this.apiKey = (apiKey || '').trim();
+  }
+
+  private getClient(): GoogleGenAI {
+    if (!this.apiKey) {
+      throw new Error('MISSING_API_KEY');
+    }
+    // Always create a new GoogleGenAI instance right before making an API call
+    // to avoid stale keys if the user changes it.
+    return new GoogleGenAI({ apiKey: this.apiKey });
+  }
 
   private parseDataUrl(dataUrl: string): { mimeType: string; data: string } {
     const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
@@ -12,35 +29,6 @@ export class GeminiService {
       return { mimeType: 'image/png', data: dataUrl };
     }
     return { mimeType: match[1], data: match[2] };
-  }
-
-  private withApiKey(url: string): string {
-    const key = process.env.API_KEY;
-    if (!key) return url;
-    if (url.includes('key=')) return url;
-    return `${url}${url.includes('?') ? '&' : '?'}key=${key}`;
-  }
-
-  private async uploadVideoForExtension(
-    ai: GoogleGenAI,
-    blob: Blob,
-    displayName?: string
-  ): Promise<{ uri: string; name?: string }> {
-    // NOTE: ai.files.upload is Gemini API only (not Vertex). In browser we can pass a Blob.
-    const mimeType = blob.type || 'video/mp4';
-    const file = await ai.files.upload({
-      file: blob,
-      config: {
-        mimeType,
-        displayName: displayName || 'generated-video.mp4',
-      },
-    });
-
-    const uri = file.uri;
-    if (!uri) {
-      throw new Error(`Upload video thành công nhưng không nhận được uri (file.name=${file.name || ''})`);
-    }
-    return { uri, name: file.name };
   }
 
   private buildShotDurations(targetDurationSec: number): number[] {
@@ -73,8 +61,7 @@ export class GeminiService {
   }
 
   async parseScriptIntoFrames(script: string, targetDurationSec: number = 30): Promise<FrameData[]> {
-    // Always create a new GoogleGenAI instance right before making an API call to use the most up-to-date key
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const ai = this.getClient();
 
     const clampedTarget = Math.max(8, Math.min(120, Math.round(targetDurationSec || 30)));
     const durations = this.buildShotDurations(clampedTarget);
@@ -180,8 +167,7 @@ export class GeminiService {
     characterBase64: string,
     referenceAssets: ReferenceAsset[] = []
   ): Promise<string> {
-    // Always create a new GoogleGenAI instance right before making an API call
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const ai = this.getClient();
 
     const labeledRefs = referenceAssets
       .map((a, idx) => {
@@ -257,12 +243,8 @@ Yêu cầu:
     return imageUrl;
   }
 
-  async generateVideo(
-    frame: FrameData,
-    onProgress: (msg: string) => void
-  ): Promise<{ videoUrl: string; videoSourceUri: string }> {
-    // Always create a new GoogleGenAI instance right before making an API call
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  async generateVideo(frame: FrameData, onProgress: (msg: string) => void): Promise<string> {
+    const ai = this.getClient();
     if (!frame.imageUrl) throw new Error("Cần ảnh gốc để tạo video");
 
     onProgress("Đang khởi tạo yêu cầu Veo 3.1...");
@@ -301,140 +283,11 @@ Lighting: ${frame.lighting}. Camera: ${frame.cameraAngle}. Stable character. Kee
     }
 
     const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-    if (!downloadLink) {
-      const filtered = operation.response?.raiMediaFilteredCount;
-      const reasons = operation.response?.raiMediaFilteredReasons;
-      const opError = (operation as any).error;
-      const hint = opError ? ` Operation error: ${JSON.stringify(opError)}` : '';
-      const raiHint = filtered
-        ? ` RAI filtered count=${filtered}, reasons=${JSON.stringify(reasons || [])}`
-        : '';
-      throw new Error(`Không tìm thấy link tải video.${raiHint}${hint}`);
-    }
+    if (!downloadLink) throw new Error("Không tìm thấy link tải video");
 
     onProgress("Đang tải video xuống...");
-    const response = await fetch(this.withApiKey(downloadLink));
+    const response = await fetch(`${downloadLink}&key=${encodeURIComponent(this.apiKey)}`);
     const blob = await response.blob();
-
-    // For future "extend" calls, veo models often require a stable URI rather than inline bytes.
-    // Upload the generated clip to Gemini Files to get a supported URI.
-    try {
-      onProgress('Đang upload clip để có URI ổn định (phục vụ extend)...');
-      const uploaded = await this.uploadVideoForExtension(
-        ai,
-        blob,
-        `shot-${frame.frameNumber || 0}.mp4`
-      );
-      return { videoUrl: URL.createObjectURL(blob), videoSourceUri: uploaded.uri };
-    } catch (e) {
-      console.warn('Upload video for extension failed; falling back to downloadLink as videoSourceUri', e);
-      return { videoUrl: URL.createObjectURL(blob), videoSourceUri: downloadLink };
-    }
-  }
-
-  async extendVideo(
-    frame: FrameData,
-    extendSeconds: number,
-    onProgress: (msg: string) => void
-  ): Promise<{ videoUrl: string; videoSourceUri: string }> {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    if (!frame.videoSourceUri && !frame.videoUrl) {
-      throw new Error('Cần clip đã tạo (videoUrl/videoSourceUri) để extend');
-    }
-
-    const seconds = Math.max(1, Math.min(16, Math.round(extendSeconds || 8)));
-    onProgress(`Đang extend clip thêm ${seconds}s...`);
-
-    const prompt = `Continue/extend the same scene seamlessly. Maintain the same character identity, clothing, lighting, camera style, and environment continuity. No burned-in text, no subtitles, no watermarks.`;
-
-    // IMPORTANT:
-    // Some Veo models do NOT support inline video bytes (encodedVideo/videoBytes).
-    // They only accept `video.uri`. So we ensure we always provide a supported URI.
-
-    const tryExtendWithUri = async (videoUri: string) => {
-      let operation = await ai.models.generateVideos({
-        model: 'veo-3.1-fast-generate-preview',
-        prompt,
-        video: { uri: videoUri, mimeType: 'video/mp4' },
-        config: {
-          numberOfVideos: 1,
-          resolution: '720p',
-          aspectRatio: (frame.aspectRatio || '9:16'),
-          durationSeconds: seconds,
-        },
-      });
-
-      while (!operation.done) {
-        await new Promise(resolve => setTimeout(resolve, 10000));
-        operation = await ai.operations.getVideosOperation({ operation: operation });
-        onProgress('Đang kết xuất clip (extend)...');
-      }
-
-      const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-      if (!downloadLink) {
-        const filtered = operation.response?.raiMediaFilteredCount;
-        const reasons = operation.response?.raiMediaFilteredReasons;
-        const opError = (operation as any).error;
-        const hint = opError ? ` Operation error: ${JSON.stringify(opError)}` : '';
-        const raiHint = filtered
-          ? ` RAI filtered count=${filtered}, reasons=${JSON.stringify(reasons || [])}`
-          : '';
-        throw new Error(`Không tìm thấy link tải video (extend).${raiHint}${hint}`);
-      }
-
-      const response = await fetch(this.withApiKey(downloadLink));
-      const outBlob = await response.blob();
-
-      // Upload extended result as well to get a stable URI for chaining.
-      try {
-        onProgress('Đang upload clip đã extend để có URI ổn định...');
-        const uploadedOut = await this.uploadVideoForExtension(
-          ai,
-          outBlob,
-          `shot-${frame.frameNumber || 0}-extended.mp4`
-        );
-        return { videoUrl: URL.createObjectURL(outBlob), videoSourceUri: uploadedOut.uri };
-      } catch (e) {
-        console.warn('Upload extended video failed; returning downloadLink as source', e);
-        return { videoUrl: URL.createObjectURL(outBlob), videoSourceUri: downloadLink };
-      }
-    };
-
-    // 1) Try using whatever URI we already have.
-    if (frame.videoSourceUri) {
-      try {
-        return await tryExtendWithUri(frame.videoSourceUri);
-      } catch (e: any) {
-        const msg = String(e?.message || e);
-        // If uri is not acceptable, we'll upload to Files and retry.
-        console.warn('Extend by existing uri failed; will try upload+uri', e);
-        if (msg.includes("encodedVideo") || msg.includes("videoBytes")) {
-          // Should not happen now (we never send videoBytes), but keep a helpful hint.
-          onProgress('Model không hỗ trợ encodedVideo/videoBytes; chuyển sang upload để lấy URI...');
-        }
-      }
-    }
-
-    // 2) Upload the clip we have (blob URL or downloadLink) to Gemini Files to obtain a supported URI.
-    onProgress('Đang chuẩn bị upload clip để extend...');
-    let inputBlob: Blob | undefined;
-    if (frame.videoUrl) {
-      inputBlob = await (await fetch(frame.videoUrl)).blob();
-    } else if (frame.videoSourceUri) {
-      // As a last resort, download by source URI.
-      inputBlob = await (await fetch(this.withApiKey(frame.videoSourceUri))).blob();
-    }
-    if (!inputBlob) {
-      throw new Error('Không thể tải blob video để upload (thiếu videoUrl/videoSourceUri)');
-    }
-
-    onProgress('Đang upload clip lên Gemini Files...');
-    const uploadedIn = await this.uploadVideoForExtension(
-      ai,
-      inputBlob,
-      `shot-${frame.frameNumber || 0}-input.mp4`
-    );
-
-    return await tryExtendWithUri(uploadedIn.uri);
+    return URL.createObjectURL(blob);
   }
 }

@@ -20,11 +20,10 @@ npm install
 
 ### 2. Cấu hình API Key
 
-Mở file `.env.local` và thay thế `PLACEHOLDER_API_KEY` bằng API key thực từ [Google AI Studio](https://aistudio.google.com/apikey):
+Ứng dụng sử dụng mô hình **BYOK (Bring Your Own Key)**: bạn nhập API key trực tiếp trong giao diện (ô ở thanh trên cùng).
 
-```env
-GEMINI_API_KEY=your_actual_api_key_here
-```
+- Lấy API key tại: https://aistudio.google.com/apikey
+- Lưu ý: API key được dùng từ trình duyệt của bạn. Không commit key lên GitHub.
 
 ### 3. Chạy ứng dụng
 ```bash
