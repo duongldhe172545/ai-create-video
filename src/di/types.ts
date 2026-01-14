@@ -4,6 +4,7 @@ export const TYPES = {
 
     // Use Cases
     ParseScriptUseCase: Symbol.for('ParseScriptUseCase'),
+    GenerateScriptUseCase: Symbol.for('GenerateScriptUseCase'),
     GenerateFrameImageUseCase: Symbol.for('GenerateFrameImageUseCase'),
     GenerateVideoUseCase: Symbol.for('GenerateVideoUseCase'),
 
@@ -14,4 +15,8 @@ export const TYPES = {
     // Presenters
     FramePresenter: Symbol.for('FramePresenter'),
     ErrorPresenter: Symbol.for('ErrorPresenter'),
+
+    // Consultant
+    ConsultantService: Symbol.for('ConsultantService'),
+    ConsultIdeaUseCase: Symbol.for('ConsultIdeaUseCase'),
 };

@@ -136,12 +136,26 @@ export class GeminiAIService implements IAIService {
                 }
             }
 
-            frames = frames.map((f, idx) => ({
-                ...f,
-                frameNumber: idx + 1,
-                durationSec: durations[idx] ?? 8,
-                aspectRatio: (f.aspectRatio as any) || '9:16',
-            }));
+            frames = frames.map((f, idx) => {
+                // Check for inline duration override in action or other fields
+                // Regex to find (5s), [5s], (5 giây), etc. allow spaces e.g. ( 5s )
+                const durationMatch = (f.action + ' ' + f.environment).match(/[\(\[]\s*(\d+)\s*(s|giây|sec|second)\s*[\)\]]/i);
+                let duration = durations[idx] ?? 8;
+
+                if (durationMatch) {
+                    const parsed = parseInt(durationMatch[1], 10);
+                    if (!isNaN(parsed) && parsed > 0) {
+                        duration = Math.min(120, Math.max(2, parsed)); // Relaxed limits for manual override
+                    }
+                }
+
+                return {
+                    ...f,
+                    frameNumber: idx + 1,
+                    durationSec: duration,
+                    aspectRatio: (f.aspectRatio as any) || '9:16',
+                };
+            });
 
             return FrameModel.validateArray(frames);
 
@@ -309,4 +323,42 @@ Lighting: ${frame.lighting}. Camera: ${frame.cameraAngle}. Stable character. Kee
             throw new VideoGenerationError(frame.frameNumber, error instanceof Error ? error.message : 'Unknown');
         }
     }
+
+    async generateScript(request: any): Promise<string> {
+        const ai = this.getClient();
+
+        try {
+            const prompt = `Bạn là chuyên gia sáng tạo nội dung video ngắn (Shorts/Reels/TikTok).
+Hãy viết một KỊCH BẢN PHÂN CẢNH (Shot List) chi tiết dựa trên ý tưởng sau:
+
+CHỦ ĐỀ/Ý TƯỞNG: ${request.topic}
+${request.tone ? `TONE/PHONG CÁCH: ${request.tone}` : ''}
+${request.market ? `THỊ TRƯỜNG/KHÁN GIẢ: ${request.market} ${request.targetAudience ? `(${request.targetAudience})` : ''}` : ''}
+${request.language ? `NGÔN NGỮ: ${request.language}` : ''}
+
+YÊU CẦU ĐẦU RA:
+- Trả về KỊCH BẢN dưới dạng văn bản thô (text), mô tả từng cảnh.
+- Mỗi cảnh nên có mô tả hình ảnh (Visual) và lời thoại/text (Audio/Text).
+- Nếu có thể, hãy ước lượng thời lượng cho từng cảnh và ghi chú vào, ví dụ: (5s).
+- Viết hấp dẫn, giữ chân người xem, phù hợp với nền tảng video ngắn.
+- KHÔNG trả về JSON, chỉ trả về văn bản kịch bản để người dùng đọc và chỉnh sửa.
+
+ĐỊNH DẠNG MONG MUỐN:
+Visual: [Mô tả hình ảnh] (5s)
+Audio: [Lời bình/Thoại]
+Text: [Text trên màn hình]
+... (tiếp tục các cảnh)`;
+
+            const result = await ai.models.generateContent({
+                model: "gemini-2.0-flash",
+                contents: prompt
+            });
+
+            return result.text || '';
+        } catch (error: any) {
+            if (error instanceof ApiKeyMissingError) throw error;
+            throw new Error(error.message || "Failed to generate script");
+        }
+    }
+
 }

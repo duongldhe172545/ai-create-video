@@ -1,5 +1,6 @@
 import { Frame } from '../../entities/models/frame.model';
 import { ReferenceAsset } from '../../entities/models/reference-asset.model';
+import { ScriptRequest } from '../../entities/models/script-request.model';
 
 export interface IAIService {
     parseScriptIntoFrames(script: string, targetDurationSec: number): Promise<Frame[]>;
@@ -14,4 +15,7 @@ export interface IAIService {
         frame: Frame,
         onProgress: (msg: string) => void
     ): Promise<string>;
+
+    generateScript(request: ScriptRequest): Promise<string>;
 }
+
