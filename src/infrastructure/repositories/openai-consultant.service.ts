@@ -61,30 +61,28 @@ export class OpenAIConsultantService implements IConsultantService {
 
         const prompt = `
       Hãy đóng vai một Đạo diễn & Biên kịch video ngắn chuyên nghiệp (TikTok/Reels/Shorts).
-      Nhiệm vụ: Viết kịch bản video dựa trên yêu cầu sau:
+      Nhiệm vụ: Viết kịch bản video dạng văn xuôi tự nhiên, cuốn hút dựa trên yêu cầu sau:
       - Chủ đề: ${request.topic}
       - Tone: ${request.tone}
       - Thị trường: ${request.market}
       - Ngôn ngữ: ${request.language}
       - Khách hàng mục tiêu: ${request.targetAudience ?? 'Đại chúng'}
 
-      YÊU CẦU ĐỊNH DẠNG (Bắt buộc tuân thủ):
-      Kịch bản phải trả về dưới dạng văn bản thuần (plain text), phân chia rõ ràng từng phân cảnh (Shot).
-      Mỗi Shot bắt buộc phải có cấu trúc sau:
-      "Shot [Số]: [Mô tả hình ảnh/hành động] (Thời lượng nếu cần, ví dụ (5s))
-      Audio: [Lời thoại hoặc âm thanh]"
+      YÊU CẦU ĐỊNH DẠNG:
+      - KHÔNG viết dưới dạng "Shot 1", "Shot 2"
+      - Viết dưới dạng văn xuôi liền mạch, tự nhiên như đang kể chuyện
+      - Mỗi câu nên mô tả một hành động, cảm xúc, hoặc hình ảnh cụ thể
+      - Sử dụng ngôn ngữ sinh động, dễ hình dung
+      - Độ dài: Tương đương 30-60 giây nội dung khi đọc (~100-200 từ)
 
-      Ví dụ:
-      Shot 1: Cận cảnh một tách cà phê bốc khói nghi ngút bên cửa sổ trời mưa. (3s)
-      Audio: Tiếng mưa rơi rả rích, nhạc lo-fi nhẹ nhàng nổi lên.
-      
-      Shot 2: Nhân vật chính (nữ, 25 tuổi) bước vào khung hình, tay cầm quyển sách cũ. (4s)
-      Audio: (Giọng MC trầm ấm) "Có những ngày bình yên đến lạ..."
+      Ví dụ format mong muốn:
+      "Một nữ sinh lớp 12 luôn đứng đầu trường bước vào ngày kiểm tra thử quan trọng với nụ cười "ổn" quen thuộc, nhưng khi tờ đề chạm tay, mọi âm thanh như bị bóp nghẹt và cô bỗng đặt bút xuống, để trang giấy trắng trở thành lời thú nhận không nói ra. Trước ánh nhìn của cả lớp, cô xin phép "không nộp bài" rồi lặng lẽ ra hành lang, nơi cô giáo không trách mắng mà chỉ hỏi một câu đơn giản: "Em có đang kiệt sức không?". Trưa hôm đó, cô bạn thân tìm thấy cô ngoài sân trường, không ép giải thích, chỉ ngồi cạnh và đưa chai nước như một cách kéo cô về lại nhịp thở..."
 
       Lưu ý:
-      - Hãy viết kịch bản sáng tạo, bắt trend, phù hợp với thị trường ${request.market}.
-      - Nếu là thị trường Vietnam, hãy dùng văn phong tự nhiên, đời thường.
-      - Đảm bảo độ dài khoảng 30-60 giây (khoảng 6-10 shots).
+      - Hãy viết kịch bản sáng tạo, bắt trend, phù hợp với thị trường ${request.market}
+      - Nếu là thị trường Vietnam, hãy dùng văn phong tự nhiên, đời thường, có cảm xúc
+      - Tập trung vào câu chuyện và cảm xúc, KHÔNG liệt kê từng shot
+      - Kịch bản phải dễ hình dung thành video ngắn
       `;
 
         const messages: ConsultantMessage[] = [

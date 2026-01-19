@@ -1,4 +1,4 @@
-import { OpenAIConsultantService } from '../infrastructure/repositories/openai-consultant.service';
+import { OpenAIConsultantService } from '../../infrastructure/repositories/openai-consultant.service';
 import { ScriptRequest } from '../../entities/models/script-request.model';
 
 export class GenerateScriptUseCase {
