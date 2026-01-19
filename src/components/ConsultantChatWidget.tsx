@@ -17,6 +17,7 @@ const ConsultantChatWidget: React.FC<ConsultantChatWidgetProps> = ({
     const [messages, setMessages] = useState<ConsultantMessage[]>([]);
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
+    const [hasShownWelcome, setHasShownWelcome] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -24,6 +25,18 @@ const ConsultantChatWidget: React.FC<ConsultantChatWidgetProps> = ({
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         }
     }, [messages]);
+
+    // Auto-show welcome message when API key is available
+    useEffect(() => {
+        if (openAIKey && isOpen && !hasShownWelcome && messages.length === 0) {
+            const welcomeMsg: ConsultantMessage = {
+                role: 'assistant',
+                content: 'Chào bạn! 👋 Mình là trợ lý AI của bạn nè. Bạn cần mình tư vấn gì về video content không? Hỏi mình bất cứ điều gì nhé! 😊'
+            };
+            setMessages([welcomeMsg]);
+            setHasShownWelcome(true);
+        }
+    }, [openAIKey, isOpen, hasShownWelcome, messages.length]);
 
     const handleSend = async () => {
         if (!input.trim() || !openAIKey) return;
@@ -83,18 +96,23 @@ const ConsultantChatWidget: React.FC<ConsultantChatWidgetProps> = ({
 
                     {/* Chat Area */}
                     <div className="flex-1 overflow-y-auto p-4 space-y-3" ref={scrollRef}>
-                        {messages.length === 0 && (
+                        {messages.length === 0 && openAIKey && (
                             <div className="text-center text-gray-600 text-xs mt-10">
-                                Chào bạn! Tôi là trợ lý ảo sáng tạo. Cần tôi tìm ý tưởng gì không?
+                                Đang tải trợ lý...
+                            </div>
+                        )}
+                        {messages.length === 0 && !openAIKey && (
+                            <div className="text-center text-gray-600 text-xs mt-10">
+                                Nhập API key ở trên để bắt đầu chat nhé! 😊
                             </div>
                         )}
                         {messages.map((m, idx) => (
                             <div key={idx} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                                 <div className={`max-w-[85%] p-3 rounded-lg text-sm ${m.role === 'user'
-                                        ? 'bg-emerald-600/80 text-white rounded-br-none'
-                                        : m.role === 'system'
-                                            ? 'bg-red-900/50 text-red-200'
-                                            : 'bg-white/10 text-gray-200 rounded-bl-none'
+                                    ? 'bg-emerald-600/80 text-white rounded-br-none'
+                                    : m.role === 'system'
+                                        ? 'bg-red-900/50 text-red-200'
+                                        : 'bg-white/10 text-gray-200 rounded-bl-none'
                                     }`}>
                                     {m.content}
                                 </div>
